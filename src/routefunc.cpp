@@ -1919,7 +1919,7 @@ void hacr_min_adapt_torus(const Router *r, const Flit *f, int in_channel,
                     vcBegin + escape_phase, 0);
 
   // Match BookSim's minimal-adaptive Torus VC partition: VCs 0-1 are
-  // escape VCs, VC 2 is reserved by that scheme, and VC 3 is adaptive.
+  // escape VCs; adaptive inputs use VC 3 for productive adaptive outputs.
   if (in_vc <= vcBegin + 1 || vcEnd < vcBegin + 3) {
     return;
   }
