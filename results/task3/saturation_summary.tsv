@@ -1,0 +1,17 @@
+topology	routing	traffic	saturation_injection	saturation_throughput	minimum_latency
+mesh	dor	bitcomp	not observed	NA	21.884633333333333
+mesh	dor	hotspot(0)	not observed	NA	17.883033333333334
+mesh	dor	transpose	not observed	NA	15.8985
+mesh	dor	uniform	not observed	NA	15.951433333333334
+mesh	hacr_min_adapt	bitcomp	not observed	NA	21.929033333333333
+mesh	hacr_min_adapt	hotspot(0)	not observed	NA	17.900100000000002
+mesh	hacr_min_adapt	transpose	not observed	NA	15.9085
+mesh	hacr_min_adapt	uniform	not observed	NA	15.968333333333334
+torus	dim_order	bitcomp	not observed	NA	16.0
+torus	dim_order	hotspot(0)	not observed	NA	15.995266666666666
+torus	dim_order	transpose	not observed	NA	15.842633333333334
+torus	dim_order	uniform	0.80	0.7988056666666666	15.952966666666667
+torus	hacr_min_adapt	bitcomp	not observed	NA	16.011233333333333
+torus	hacr_min_adapt	hotspot(0)	not observed	NA	16.000733333333333
+torus	hacr_min_adapt	transpose	not observed	NA	15.840633333333333
+torus	hacr_min_adapt	uniform	not observed	NA	15.920200000000001
