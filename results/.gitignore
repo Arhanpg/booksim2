@@ -1,0 +1,6 @@
+# Per-run simulator logs and generated plots are reproducible outputs.
+raw/
+task2/raw/
+task3/raw/
+graphs/*.png
+graphs/task2_task3/*.png

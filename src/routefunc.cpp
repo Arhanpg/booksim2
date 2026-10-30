@@ -39,6 +39,8 @@
 #include <map>
 #include <cstdlib>
 #include <cassert>
+#include <algorithm>
+#include <iostream>
 
 #include "booksim.hpp"
 #include "routefunc.hpp"
@@ -53,6 +55,9 @@
 
 
 map<string, tRoutingFunction> gRoutingFunctionMap;
+map<pair<int, int>, double> gHacrHistory;
+double gHacrAlpha = 0.60;
+double gHacrLambda = 0.80;
 
 /* Global information used by routing functions */
 
@@ -1795,7 +1800,165 @@ void min_adapt_torus( const Router *r, const Flit *f, int in_channel, OutputSet 
 
 //=============================================================
 
-void dest_tag_fly( const Router *r, const Flit *f, int in_channel, 
+static double hacr_score(const Router *r, int port)
+{
+  const double current = max(r->GetUsedCredit(port), 0);
+  const pair<int, int> key(r->GetID(), port);
+  const double previous = gHacrHistory[key];
+  const double history = gHacrLambda * previous +
+                         (1.0 - gHacrLambda) * current;
+  gHacrHistory[key] = history;
+  return gHacrAlpha * current + (1.0 - gHacrAlpha) * history;
+}
+
+static vector<pair<int, double> > hacr_rank_ports(const Router *r,
+                                                   vector<int> const &ports)
+{
+  assert(!ports.empty());
+  vector<pair<int, double> > ranked;
+  for (size_t i = 0; i < ports.size(); ++i) {
+    const int candidate = ports[i];
+    ranked.push_back(make_pair(candidate, hacr_score(r, candidate)));
+  }
+  sort(ranked.begin(), ranked.end(),
+       [](pair<int, double> const &left, pair<int, double> const &right) {
+         if (left.second != right.second) {
+           return left.second < right.second;
+         }
+         return left.first < right.first;
+       });
+  return ranked;
+}
+
+void hacr_min_adapt_mesh(const Router *r, const Flit *f, int in_channel,
+                        OutputSet *outputs, bool inject)
+{
+  int vcBegin = 0, vcEnd = gNumVCs - 1;
+  if (f->type == Flit::READ_REQUEST) {
+    vcBegin = gReadReqBeginVC; vcEnd = gReadReqEndVC;
+  } else if (f->type == Flit::WRITE_REQUEST) {
+    vcBegin = gWriteReqBeginVC; vcEnd = gWriteReqEndVC;
+  } else if (f->type == Flit::READ_REPLY) {
+    vcBegin = gReadReplyBeginVC; vcEnd = gReadReplyEndVC;
+  } else if (f->type == Flit::WRITE_REPLY) {
+    vcBegin = gWriteReplyBeginVC; vcEnd = gWriteReplyEndVC;
+  }
+  assert(((f->vc >= vcBegin) && (f->vc <= vcEnd)) ||
+         (inject && (f->vc < 0)));
+  outputs->Clear();
+  if (inject) {
+    outputs->AddRange(-1, vcBegin, vcEnd);
+    return;
+  }
+  if (r->GetID() == f->dest) {
+    outputs->AddRange(2 * gN, vcBegin, vcEnd);
+    return;
+  }
+
+  const int escape = dor_next_mesh(r->GetID(), f->dest);
+  outputs->AddRange(escape, vcBegin, vcBegin, 0);
+  if (f->vc >= vcBegin && f->vc <= vcBegin) {
+    return;
+  }
+
+  vector<int> candidates;
+  int cur = r->GetID();
+  int dest = f->dest;
+  for (int n = 0; n < gN; ++n) {
+    if ((cur % gK) != (dest % gK)) {
+      candidates.push_back((cur % gK < dest % gK) ? 2 * n : 2 * n + 1);
+    }
+    cur /= gK;
+    dest /= gK;
+  }
+  if (!candidates.empty()) {
+    vector<pair<int, double> > ranked = hacr_rank_ports(r, candidates);
+    int priority = static_cast<int>(ranked.size());
+    for (size_t i = 0; i < ranked.size(); ++i) {
+      outputs->AddRange(ranked[i].first, vcBegin + 1, vcEnd, priority);
+      --priority;
+    }
+  }
+}
+
+void hacr_min_adapt_torus(const Router *r, const Flit *f, int in_channel,
+                          OutputSet *outputs, bool inject)
+{
+  int vcBegin = 0, vcEnd = gNumVCs - 1;
+  if (f->type == Flit::READ_REQUEST) {
+    vcBegin = gReadReqBeginVC; vcEnd = gReadReqEndVC;
+  } else if (f->type == Flit::WRITE_REQUEST) {
+    vcBegin = gWriteReqBeginVC; vcEnd = gWriteReqEndVC;
+  } else if (f->type == Flit::READ_REPLY) {
+    vcBegin = gReadReplyBeginVC; vcEnd = gReadReplyEndVC;
+  } else if (f->type == Flit::WRITE_REPLY) {
+    vcBegin = gWriteReplyBeginVC; vcEnd = gWriteReplyEndVC;
+  }
+  assert(((f->vc >= vcBegin) && (f->vc <= vcEnd)) ||
+         (inject && (f->vc < 0)));
+  outputs->Clear();
+  if (inject) {
+    outputs->AddRange(-1, vcBegin, vcEnd);
+    return;
+  }
+  if (r->GetID() == f->dest) {
+    outputs->AddRange(2 * gN, vcBegin, vcEnd);
+    return;
+  }
+
+  const int in_vc = (in_channel == 2 * gN) ? vcEnd : f->vc;
+  int escape_port;
+  if (in_vc <= vcBegin + 1) {
+    dor_next_torus(r->GetID(), f->dest, in_channel, &escape_port,
+                   &f->ph, false);
+    outputs->AddRange(escape_port, vcBegin + f->ph,
+                      vcBegin + f->ph, 0);
+    return;
+  }
+  dor_next_torus(r->GetID(), f->dest, 2 * gN, &escape_port,
+                 &f->ph, false);
+  outputs->AddRange(escape_port, vcBegin + f->ph,
+                    vcBegin + f->ph, 0);
+  if (vcEnd <= vcBegin + 1) {
+    return;
+  }
+
+  vector<int> candidates;
+  int cur = r->GetID();
+  int dest = f->dest;
+  for (int n = 0; n < gN; ++n) {
+    if ((cur % gK) != (dest % gK)) {
+      const int distance = gK - 2 *
+        (((dest % gK) - (cur % gK) + gK) % gK);
+      if (distance > 0) {
+        candidates.push_back(2 * n);
+      } else if (distance < 0) {
+        candidates.push_back(2 * n + 1);
+      } else {
+        candidates.push_back(2 * n);
+        candidates.push_back(2 * n + 1);
+      }
+    }
+    cur /= gK;
+    dest /= gK;
+  }
+  if (!candidates.empty()) {
+    const int adaptive_vc = vcBegin + 3;
+    if (adaptive_vc > vcEnd) {
+      return;
+    }
+    vector<pair<int, double> > ranked = hacr_rank_ports(r, candidates);
+    int priority = static_cast<int>(ranked.size());
+    for (size_t i = 0; i < ranked.size(); ++i) {
+      outputs->AddRange(ranked[i].first, adaptive_vc, adaptive_vc, priority);
+      --priority;
+    }
+  }
+}
+
+//=============================================================
+
+void dest_tag_fly( const Router *r, const Flit *f,  int in_channel,
 		   OutputSet *outputs, bool inject )
 {
   int vcBegin = 0, vcEnd = gNumVCs-1;
@@ -1918,6 +2081,15 @@ void InitializeRoutingMap( const Configuration & config )
 {
 
   gNumVCs = config.GetInt( "num_vcs" );
+  gHacrAlpha = config.GetFloat("hacr_alpha");
+  gHacrLambda = config.GetFloat("hacr_lambda");
+  if (gHacrAlpha < 0.0 || gHacrAlpha > 1.0 ||
+      gHacrLambda < 0.0 || gHacrLambda > 1.0) {
+    cerr << "Invalid HACR parameter: hacr_alpha and hacr_lambda must be "
+         << "within [0, 1]." << endl;
+    exit(1);
+  }
+  gHacrHistory.clear();
 
   //
   // traffic class partitions
@@ -1982,6 +2154,8 @@ void InitializeRoutingMap( const Configuration & config )
 
   gRoutingFunctionMap["min_adapt_mesh"]   = &min_adapt_mesh;
   gRoutingFunctionMap["min_adapt_torus"]  = &min_adapt_torus;
+  gRoutingFunctionMap["hacr_min_adapt_mesh"] = &hacr_min_adapt_mesh;
+  gRoutingFunctionMap["hacr_min_adapt_torus"] = &hacr_min_adapt_torus;
 
   gRoutingFunctionMap["planar_adapt_mesh"] = &planar_adapt_mesh;
 
